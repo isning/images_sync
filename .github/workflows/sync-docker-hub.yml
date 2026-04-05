@@ -21,32 +21,63 @@ jobs:
     steps:
       - name: Sync ${{ matrix.image }}
         run: |
-          RAW_IMAGE="${{ matrix.image }}"
-          IMAGE_LOWER=$(echo "$RAW_IMAGE" | tr '[:upper:]' '[:lower:]')
+          RAW_REPO="${{ matrix.image }}"
+          REPO_LOWER=$(echo "$RAW_REPO" | tr '[:upper:]' '[:lower:]')
 
-          if [[ "$IMAGE_LOWER" != */* ]]; then
-            SOURCE_IMAGE="library/$IMAGE_LOWER"
+          if [[ "$REPO_LOWER" != */* ]]; then
+            NAMESPACE="library"
+            REPO_NAME="$REPO_LOWER"
           else
-            SOURCE_IMAGE="$IMAGE_LOWER"
+            NAMESPACE="${REPO_LOWER%/*}"
+            REPO_NAME="${REPO_LOWER#*/}"
           fi
           
+          SOURCE_REPO="${NAMESPACE}/${REPO_NAME}"
           OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           
-          SOURCE="docker://docker.io/${SOURCE_IMAGE}"
-          TARGET="docker://ghcr.io/${OWNER}/docker.io/${IMAGE_LOWER}"
-          
-          echo "Syncing $SOURCE -> $TARGET"
-
           SRC_CREDS_OPT=""
           if [[ -n "${{ secrets.DOCKERHUB_USER }}" && -n "${{ secrets.DOCKERHUB_TOKEN }}" ]]; then
             SRC_CREDS_OPT="--src-creds=${{ secrets.DOCKERHUB_USER }}:${{ secrets.DOCKERHUB_TOKEN }}"
-            echo "Using Docker Hub credentials for source."
-          else
-            echo "Warning: Pulling anonymously. May hit Docker Hub rate limits."
           fi
 
-          skopeo copy --all --retry-times 3 \
-            $SRC_CREDS_OPT \
-            --dest-creds="${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
-            "$SOURCE" \
-            "$TARGET"
+          echo "Fetching recently updated tags for docker.io/${SOURCE_REPO}..."
+
+          TAGS=$(curl -s "https://hub.docker.com/v2/namespaces/${NAMESPACE}/repositories/${REPO_NAME}/tags?page_size=10&ordering=last_updated" | jq -r '.results[].name')
+
+          if [ -z "$TAGS" ] || [ "$TAGS" == "null" ]; then
+            echo "Failed to fetch tags from Docker Hub API."
+            exit 1
+          fi
+
+          for TAG in $TAGS; do
+            SOURCE="docker://docker.io/${SOURCE_REPO}:${TAG}"
+            TARGET="docker://ghcr.io/${OWNER}/docker.io/${REPO_LOWER}:${TAG}"
+            
+            echo "----------------------------------------"
+            echo "Checking tag: $TAG"
+            
+            DH_DIGEST=$(skopeo inspect $SRC_CREDS_OPT --format '{{.Digest}}' "$SOURCE" 2>/dev/null || echo "DH_ERROR")
+            
+            GHCR_DIGEST=$(skopeo inspect --creds="${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" --format '{{.Digest}}' "$TARGET" 2>/dev/null || echo "NOT_FOUND")
+            
+            if [ "$DH_DIGEST" == "DH_ERROR" ]; then
+               echo "⚠️ Failed to inspect source image: $SOURCE. Skipping."
+               continue
+            fi
+
+            if [ "$DH_DIGEST" == "$GHCR_DIGEST" ]; then
+              echo "✅ Digest matches ($DH_DIGEST). Tag is up-to-date. Skipping."
+            else
+              if [ "$GHCR_DIGEST" == "NOT_FOUND" ]; then
+                echo "🆕 Tag not found in GHCR. Starting sync..."
+              else
+                echo "🔄 Digest changed (DH: $DH_DIGEST != GHCR: $GHCR_DIGEST). Starting sync..."
+              fi
+              
+              skopeo copy --all --retry-times 3 \
+                $SRC_CREDS_OPT \
+                --dest-creds="${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
+                "$SOURCE" \
+                "$TARGET"
+            fi
+          done
