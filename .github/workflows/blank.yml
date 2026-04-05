@@ -1,0 +1,52 @@
+name: Scheduled Sync Multiple Images to GHCR
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        image: 
+          - mlikiowa/napcat-docker:latest
+
+    steps:
+      - name: Sync ${{ matrix.image }}
+        run: |
+          RAW_IMAGE="${{ matrix.image }}"
+          IMAGE_LOWER=$(echo "$RAW_IMAGE" | tr '[:upper:]' '[:lower:]')
+
+          if [[ "$IMAGE_LOWER" != */* ]]; then
+            SOURCE_IMAGE="library/$IMAGE_LOWER"
+          else
+            SOURCE_IMAGE="$IMAGE_LOWER"
+          fi
+          
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          
+          SOURCE="docker://docker.io/${SOURCE_IMAGE}"
+          TARGET="docker://ghcr.io/${OWNER}/docker.io/${IMAGE_LOWER}"
+          
+          echo "Syncing $SOURCE -> $TARGET"
+
+          SRC_CREDS_OPT=""
+          if [[ -n "${{ secrets.DOCKERHUB_USER }}" && -n "${{ secrets.DOCKERHUB_TOKEN }}" ]]; then
+            SRC_CREDS_OPT="--src-creds=${{ secrets.DOCKERHUB_USER }}:${{ secrets.DOCKERHUB_TOKEN }}"
+            echo "Using Docker Hub credentials for source."
+          else
+            echo "Warning: Pulling anonymously. May hit Docker Hub rate limits."
+          fi
+
+          skopeo copy --all --retry-times 3 \
+            $SRC_CREDS_OPT \
+            --dest-creds="${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
+            "$SOURCE" \
+            "$TARGET"
