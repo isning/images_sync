@@ -15,13 +15,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: 
-          - mlikiowa/napcat-docker:latest
+        image_repo: 
+          - mlikiowa/napcat-docker
 
     steps:
-      - name: Sync ${{ matrix.image }}
+      - name: Sync ${{ matrix.image_repo }}
         run: |
-          RAW_REPO="${{ matrix.image }}"
+          RAW_REPO="${{ matrix.image_repo }}"
           REPO_LOWER=$(echo "$RAW_REPO" | tr '[:upper:]' '[:lower:]')
 
           if [[ "$REPO_LOWER" != */* ]]; then
