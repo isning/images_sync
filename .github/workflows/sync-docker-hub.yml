@@ -42,7 +42,7 @@ jobs:
 
           echo "Fetching recently updated tags for docker.io/${SOURCE_REPO}..."
 
-          TAGS=$(curl -s "https://hub.docker.com/v2/namespaces/${NAMESPACE}/repositories/${REPO_NAME}/tags?page_size=10&ordering=last_updated" | jq -r '.results[].name')
+          TAGS=$(curl -s "https://hub.docker.com/v2/namespaces/${NAMESPACE}/repositories/${REPO_NAME}/tags?page_size=10&ordering=last_updated" | jq -r '[.results[].name] | reverse | .[]')
 
           if [ -z "$TAGS" ] || [ "$TAGS" == "null" ]; then
             echo "Failed to fetch tags from Docker Hub API."
